@@ -1,6 +1,7 @@
 import React from "react";
 import { defaultTheme as theme } from "./components/theme";
 import styled from "styled-components/macro";
+import { useLocalStorage } from "./components/useLocalStorage";
 
 export default function App() {
   return <AppInstance />;
@@ -14,7 +15,12 @@ function appFactory<Graph, NodeId>({
   NodeId: NodeIdInterface<NodeId>;
 }) {
   return function App() {
-    const [graph, setGraph] = React.useState<Graph>(Graph.empty);
+    const [graph, setGraph] = useLocalStorage<Graph>({
+      key: "graph",
+      initialValue: Graph.empty,
+      serialize: Graph.toJSON,
+      deserialize: Graph.fromJSON,
+    });
     const [text, setText] = React.useState("");
     const [highlightedNodeId, setHighlightedNodeId] = React.useState<NodeId | null>(null);
     return (
@@ -299,12 +305,14 @@ type NodeIdInterface<NodeId> = {
   equals(nodeId1: NodeId, nodeId2: NodeId): boolean;
 };
 
-type GraphInterface<Store, NodeId> = {
-  empty: Store;
-  getNodeIds(store: Store): Array<NodeId>;
-  getNodeAttributes(store: Store, nodeId: NodeId): NodeAttributes<NodeId> | null;
-  setNodeAttributes(store: Store, nodeId: NodeId, attributes: NodeAttributes<NodeId> | null): Store;
-  getReferenceCounts(store: Store, nodeId: NodeId): number;
+type GraphInterface<Graph, NodeId> = {
+  empty: Graph;
+  getNodeIds(graph: Graph): Array<NodeId>;
+  getNodeAttributes(graph: Graph, nodeId: NodeId): NodeAttributes<NodeId> | null;
+  setNodeAttributes(graph: Graph, nodeId: NodeId, attributes: NodeAttributes<NodeId> | null): Graph;
+  toJSON(graph: Graph): string;
+  fromJSON(json: string): Graph | null;
+  getReferenceCounts(graph: Graph, nodeId: NodeId): number;
 };
 
 type NodeAttributes<NodeId> = {
@@ -341,6 +349,12 @@ const DictGraph: GraphInterface<Record<string, NodeAttributes<string>>, string> 
       ...store,
       [nodeId]: attributes,
     };
+  },
+  toJSON(store) {
+    return JSON.stringify(store);
+  },
+  fromJSON(json) {
+    return JSON.parse(json);
   },
   getReferenceCounts(store, nodeId) {
     const Graph = DictGraph;
