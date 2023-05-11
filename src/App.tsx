@@ -15,14 +15,30 @@ function appFactory<Graph, NodeId>({
   NodeId: NodeIdInterface<NodeId>;
 }) {
   return function App() {
-    const [graph, setGraph] = useLocalStorage<Graph>({
-      key: "graph",
-      initialValue: Graph.empty,
-      serialize: Graph.toJSON,
-      deserialize: Graph.fromJSON,
+    const [graphs, setGraphs] = useLocalStorage<Record<string, Graph>>({
+      key: "graphs",
+      initialValue: {},
+      serialize(graphs) {
+        return JSON.stringify(
+          Object.fromEntries(Object.entries(graphs).map(([graphId, graph]) => [graphId, Graph.toJsonObject(graph)]))
+        );
+      },
+      deserialize(json) {
+        try {
+          return Object.fromEntries(
+            Object.entries(JSON.parse(json)).map(([graphId, graph]: any) => [graphId, Graph.fromJsonObject(graph)])
+          );
+        } catch (error) {
+          return null;
+        }
+      },
     });
-    const [text, setText] = React.useState("");
-    const [highlightedNodeId, setHighlightedNodeId] = React.useState<NodeId | null>(null);
+    const [currentGraphId, setCurrentGraphId] = React.useState<string>("");
+    const [graphsForDiff, setGraphsForDiff] = React.useState<Record<string, true>>({});
+    const diffColors = getDiffColors(Object.values(graphsForDiff).length);
+    const diffColorsByGraphId = Object.fromEntries(
+      Object.entries(graphsForDiff).map(([graphId], index) => [graphId, diffColors[index]])
+    );
     return (
       <div
         css={`
@@ -33,6 +49,98 @@ function appFactory<Graph, NodeId>({
           height: 100vh;
         `}
       >
+        <div
+          css={`
+            background-color: ${theme.backgroundColorSecondary};
+            display: flex;
+            flex-wrap: wrap;
+          `}
+        >
+          {Object.entries(graphs).map(([graphId, graph]) => {
+            const isSelected = graphId === currentGraphId;
+            const isDiff = graphsForDiff[graphId];
+            const diffColor = diffColorsByGraphId[graphId];
+            return (
+              <div
+                key={graphId}
+                css={`
+                  background-color: ${isSelected ? theme.backgroundColor : theme.backgroundColorSecondary};
+                  &:hover {
+                    background-color: ${theme.backgroundColorHighlight};
+                  }
+                  border-bottom: 4px solid ${isDiff ? diffColor : "transparent"};
+                  user-select: none;
+                  width: 100px;
+                  padding-left: 1ch;
+                  display: flex;
+                  justify-content: space-between;
+                `}
+                onClick={(event) => {
+                  if (event.ctrlKey) {
+                    const newGraphsForDiff = { ...graphsForDiff };
+                    if (newGraphsForDiff[graphId]) {
+                      delete newGraphsForDiff[graphId];
+                    } else {
+                      newGraphsForDiff[graphId] = true;
+                    }
+                    setGraphsForDiff(newGraphsForDiff);
+                  } else {
+                    setCurrentGraphId(graphId);
+                  }
+                }}
+              ></div>
+            );
+          })}
+          <SimpleButton
+            label="+"
+            onClick={() => {
+              const graphId = crypto.randomUUID();
+              const newGraphs = { ...graphs };
+              newGraphs[graphId] = Graph.empty;
+              setGraphs(newGraphs);
+              setCurrentGraphId(graphId);
+            }}
+            isEnabled={true}
+          />
+          <SimpleButton
+            label="Duplicate"
+            onClick={() => {
+              const newGraphs = { ...graphs };
+              const newGraphId = crypto.randomUUID();
+              newGraphs[newGraphId] = graphs[currentGraphId];
+              setGraphs(newGraphs);
+              setCurrentGraphId(newGraphId);
+            }}
+            isEnabled={Boolean(graphs[currentGraphId!])}
+          />
+          <SimpleButton
+            label="Delete"
+            onClick={() => {
+              const newGraphs = { ...graphs };
+              delete newGraphs[currentGraphId];
+              setGraphs(newGraphs);
+            }}
+            isEnabled={Boolean(graphs[currentGraphId!])}
+          />
+        </div>
+        {graphs[currentGraphId!] && Object.values(graphsForDiff).length === 0 && (
+          <Editor
+            graph={graphs[currentGraphId!]}
+            onGraphChange={(graph) => {
+              const newGraphs = { ...graphs };
+              newGraphs[currentGraphId!] = graph;
+              setGraphs(newGraphs);
+            }}
+          />
+        )}
+      </div>
+    );
+  };
+  function Editor({ graph, onGraphChange }: { graph: Graph; onGraphChange(graph: Graph): void }) {
+    const [text, setText] = React.useState("");
+    const [highlightedNodeId, setHighlightedNodeId] = React.useState<NodeId | null>(null);
+    return (
+      <div css={``}>
         {Graph.getNodeIds(graph).map((nodeId) => {
           const nodeAttributes = Graph.getNodeAttributes(graph, nodeId)!;
           return (
@@ -40,7 +148,7 @@ function appFactory<Graph, NodeId>({
               <NodeLabel
                 graph={graph}
                 nodeId={nodeId}
-                onGraphChange={setGraph}
+                onGraphChange={onGraphChange}
                 isHighlighted={highlightedNodeId ? highlightedNodeId === nodeId : false}
                 onIsHighlighted={setHighlightedNodeId}
               />
@@ -49,7 +157,7 @@ function appFactory<Graph, NodeId>({
                 graph={graph}
                 value={nodeAttributes.extract}
                 onChange={(extractNodeId) => {
-                  setGraph(Graph.setNodeAttributes(graph, nodeId, { ...nodeAttributes, extract: extractNodeId }));
+                  onGraphChange(Graph.setNodeAttributes(graph, nodeId, { ...nodeAttributes, extract: extractNodeId }));
                 }}
                 isHighlighted={highlightedNodeId ? highlightedNodeId === nodeAttributes.extract : false}
                 onIsHighlighted={setHighlightedNodeId}
@@ -65,14 +173,14 @@ function appFactory<Graph, NodeId>({
           onKeyDown={(event) => {
             if (event.key === "Enter") {
               const nodeId = NodeId.createUnique();
-              setGraph(Graph.setNodeAttributes(graph, nodeId, { label: text, extract: null }));
+              onGraphChange(Graph.setNodeAttributes(graph, nodeId, { label: text, extract: null }));
               setText("");
             }
           }}
         />
       </div>
     );
-  };
+  }
   function NodeLabel({
     graph,
     onGraphChange,
@@ -310,8 +418,8 @@ type GraphInterface<Graph, NodeId> = {
   getNodeIds(graph: Graph): Array<NodeId>;
   getNodeAttributes(graph: Graph, nodeId: NodeId): NodeAttributes<NodeId> | null;
   setNodeAttributes(graph: Graph, nodeId: NodeId, attributes: NodeAttributes<NodeId> | null): Graph;
-  toJSON(graph: Graph): string;
-  fromJSON(json: string): Graph | null;
+  toJsonObject(graph: Graph): unknown;
+  fromJsonObject(object: unknown): Graph | null;
   getReferenceCounts(graph: Graph, nodeId: NodeId): number;
 };
 
@@ -350,18 +458,18 @@ const DictGraph: GraphInterface<Record<string, NodeAttributes<string>>, string> 
       [nodeId]: attributes,
     };
   },
-  toJSON(store) {
-    return JSON.stringify(store);
+  toJsonObject(store) {
+    return store;
   },
-  fromJSON(json) {
-    return JSON.parse(json);
+  fromJsonObject(object) {
+    return object as any;
   },
-  getReferenceCounts(store, nodeId) {
+  getReferenceCounts(graph, nodeId) {
     const Graph = DictGraph;
     const NodeId = StringNodeId;
     let count = 0;
-    for (const otherNodeId of Graph.getNodeIds(store)) {
-      const otherNodeAttributes = Graph.getNodeAttributes(store, otherNodeId)!;
+    for (const otherNodeId of Graph.getNodeIds(graph)) {
+      const otherNodeAttributes = Graph.getNodeAttributes(graph, otherNodeId)!;
       if (otherNodeAttributes.extract && NodeId.equals(otherNodeAttributes.extract, nodeId)) {
         count++;
       }
@@ -383,4 +491,33 @@ function getLevenshteinDistance(a: string, b: string) {
           ? dp[i - 1][j - 1]
           : Math.min(dp[i - 1][j - 1] + 1, Math.min(dp[i - 1][j] + 1, dp[i][j - 1] + 1));
   return dp[a.length][b.length];
+}
+
+function SimpleButton({ label, onClick, isEnabled }: { label: string; onClick(): void; isEnabled: boolean }) {
+  return (
+    <div
+      onClick={(event) => {
+        if (isEnabled) onClick();
+      }}
+      css={`
+        user-select: none;
+        background-color: transparent;
+        &:hover {
+          background-color: ${theme.backgroundColorHighlight};
+        }
+        padding: 0px 1ch;
+        color: ${isEnabled ? theme.textColor : theme.textColorSecondary};
+      `}
+    >
+      {label}
+    </div>
+  );
+}
+
+function getDiffColors(count: number) {
+  const colors = [];
+  for (let i = 0; i < count; i++) {
+    colors.push(`hsl(${(360 * i) / count}, 50%, 50%)`);
+  }
+  return colors;
 }
