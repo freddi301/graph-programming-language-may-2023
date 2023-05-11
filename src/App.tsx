@@ -34,11 +34,7 @@ function appFactory<Graph, NodeId>({
       },
     });
     const [currentGraphId, setCurrentGraphId] = React.useState<string>("");
-    const [graphsForDiff, setGraphsForDiff] = React.useState<Record<string, true>>({});
-    const diffColors = getDiffColors(Object.values(graphsForDiff).length);
-    const diffColorsByGraphId = Object.fromEntries(
-      Object.entries(graphsForDiff).map(([graphId], index) => [graphId, diffColors[index]])
-    );
+    const [graphsDiffColors, setGraphsDiffColors] = React.useState<Record<string, string>>({});
     return (
       <div
         css={`
@@ -56,10 +52,10 @@ function appFactory<Graph, NodeId>({
             flex-wrap: wrap;
           `}
         >
-          {Object.entries(graphs).map(([graphId, graph]) => {
+          {Object.keys(graphs).map((graphId) => {
             const isSelected = graphId === currentGraphId;
-            const isDiff = graphsForDiff[graphId];
-            const diffColor = diffColorsByGraphId[graphId];
+            const diffColor = graphsDiffColors[graphId];
+            const isDiff = Boolean(diffColor);
             return (
               <div
                 key={graphId}
@@ -77,13 +73,17 @@ function appFactory<Graph, NodeId>({
                 `}
                 onClick={(event) => {
                   if (event.ctrlKey) {
-                    const newGraphsForDiff = { ...graphsForDiff };
-                    if (newGraphsForDiff[graphId]) {
-                      delete newGraphsForDiff[graphId];
+                    const newGraphsDiffColors = { ...graphsDiffColors };
+                    if (newGraphsDiffColors[graphId]) {
+                      delete newGraphsDiffColors[graphId];
                     } else {
-                      newGraphsForDiff[graphId] = true;
+                      // get new diff color from diffColors that is not already used in graphsDiffColors
+                      const newDiffColor = diffColors.find(
+                        (diffColor) => !Object.values(newGraphsDiffColors).includes(diffColor)
+                      )!;
+                      newGraphsDiffColors[graphId] = newDiffColor;
                     }
-                    setGraphsForDiff(newGraphsForDiff);
+                    setGraphsDiffColors(newGraphsDiffColors);
                   } else {
                     setCurrentGraphId(graphId);
                   }
@@ -123,46 +123,80 @@ function appFactory<Graph, NodeId>({
             isEnabled={Boolean(graphs[currentGraphId!])}
           />
         </div>
-        {graphs[currentGraphId!] && Object.values(graphsForDiff).length === 0 && (
+        {graphs[currentGraphId!] && (
           <Editor
-            graph={graphs[currentGraphId!]}
-            onGraphChange={(graph) => {
+            graphs={Object.fromEntries(
+              Object.entries(graphs).filter(([graphId]) => graphId === currentGraphId || graphsDiffColors[graphId])
+            )}
+            onGraphChange={(graphKey, graph) => {
               const newGraphs = { ...graphs };
-              newGraphs[currentGraphId!] = graph;
+              newGraphs[graphKey!] = graph;
               setGraphs(newGraphs);
             }}
+            currentGraphKey={currentGraphId!}
+            graphsDiffColors={graphsDiffColors}
           />
         )}
       </div>
     );
   };
-  function Editor({ graph, onGraphChange }: { graph: Graph; onGraphChange(graph: Graph): void }) {
+  function Editor({
+    graphs,
+    onGraphChange,
+    currentGraphKey,
+    graphsDiffColors,
+  }: {
+    currentGraphKey: string;
+    graphs: Record<string, Graph>;
+    graphsDiffColors: Record<string, string>;
+    onGraphChange(graphKey: string, graph: Graph): void;
+  }) {
     const [text, setText] = React.useState("");
     const [highlightedNodeId, setHighlightedNodeId] = React.useState<NodeId | null>(null);
+    const allGraphsNodeIds = Array.from(new Set(Object.values(graphs).flatMap((graph) => Graph.getNodeIds(graph))));
+    const graphKeys = Object.keys(graphs);
     return (
       <div css={``}>
-        {Graph.getNodeIds(graph).map((nodeId) => {
-          const nodeAttributes = Graph.getNodeAttributes(graph, nodeId)!;
+        {allGraphsNodeIds.map((nodeId) => {
           return (
-            <div key={NodeId.stringify(nodeId)}>
-              <NodeLabel
-                graph={graph}
-                nodeId={nodeId}
-                onGraphChange={onGraphChange}
-                isHighlighted={highlightedNodeId ? highlightedNodeId === nodeId : false}
-                onIsHighlighted={setHighlightedNodeId}
-              />
-              {" = "}
-              <NodeIdSelector
-                graph={graph}
-                value={nodeAttributes.extract}
-                onChange={(extractNodeId) => {
-                  onGraphChange(Graph.setNodeAttributes(graph, nodeId, { ...nodeAttributes, extract: extractNodeId }));
-                }}
-                isHighlighted={highlightedNodeId ? highlightedNodeId === nodeAttributes.extract : false}
-                onIsHighlighted={setHighlightedNodeId}
-              />
-            </div>
+            <React.Fragment key={NodeId.stringify(nodeId)}>
+              {graphKeys.map((graphKey) => {
+                const graph = graphs[graphKey];
+                const nodeAttributes = Graph.getNodeAttributes(graph, nodeId);
+                if (!nodeAttributes) return null;
+                return (
+                  <div
+                    key={graphKey}
+                    css={`
+                      border-left: 4px solid ${graphsDiffColors[graphKey] || "transparent"};
+                    `}
+                  >
+                    <NodeLabel
+                      graph={graph}
+                      nodeId={nodeId}
+                      onGraphChange={() => {
+                        onGraphChange(graphKey, graph);
+                      }}
+                      isHighlighted={highlightedNodeId ? highlightedNodeId === nodeId : false}
+                      onIsHighlighted={setHighlightedNodeId}
+                    />
+                    {" = "}
+                    <NodeIdSelector
+                      graph={graph}
+                      value={nodeAttributes.extract}
+                      onChange={(extractNodeId) => {
+                        onGraphChange(
+                          graphKey,
+                          Graph.setNodeAttributes(graph, nodeId, { ...nodeAttributes, extract: extractNodeId })
+                        );
+                      }}
+                      isHighlighted={highlightedNodeId ? highlightedNodeId === nodeAttributes.extract : false}
+                      onIsHighlighted={setHighlightedNodeId}
+                    />
+                  </div>
+                );
+              })}
+            </React.Fragment>
           );
         })}
         <input
@@ -173,7 +207,10 @@ function appFactory<Graph, NodeId>({
           onKeyDown={(event) => {
             if (event.key === "Enter") {
               const nodeId = NodeId.createUnique();
-              onGraphChange(Graph.setNodeAttributes(graph, nodeId, { label: text, extract: null }));
+              onGraphChange(
+                currentGraphKey,
+                Graph.setNodeAttributes(graphs[currentGraphKey], nodeId, { label: text, extract: null })
+              );
               setText("");
             }
           }}
@@ -514,10 +551,4 @@ function SimpleButton({ label, onClick, isEnabled }: { label: string; onClick():
   );
 }
 
-function getDiffColors(count: number) {
-  const colors = [];
-  for (let i = 0; i < count; i++) {
-    colors.push(`hsl(${(360 * i) / count}, 50%, 50%)`);
-  }
-  return colors;
-}
+const diffColors = ["red", "green", "blue", "yellow", "orange", "purple"];
