@@ -1,26 +1,256 @@
-import React from 'react';
-import logo from './logo.svg';
-import './App.css';
+import React from "react";
+import { defaultTheme as theme } from "./components/theme";
+import styled from "styled-components/macro";
 
-function App() {
-  return (
-    <div className="App">
-      <header className="App-header">
-        <img src={logo} className="App-logo" alt="logo" />
-        <p>
-          Edit <code>src/App.tsx</code> and save to reload.
-        </p>
-        <a
-          className="App-link"
-          href="https://reactjs.org"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          Learn React
-        </a>
-      </header>
-    </div>
-  );
+export default function App() {
+  return <AppInstance />;
 }
 
-export default App;
+function appFactory<Graph, NodeId>({
+  Graph,
+  NodeId,
+}: {
+  Graph: GraphInterface<Graph, NodeId>;
+  NodeId: NodeIdInterface<NodeId>;
+}) {
+  return function App() {
+    const [graph, setGraph] = React.useState<Graph>(Graph.empty);
+    const [text, setText] = React.useState("");
+    return (
+      <div
+        css={`
+          background-color: ${theme.backgroundColor};
+          color: ${theme.textColor};
+          font-family: ${theme.fontFamily};
+          width: 100vw;
+          height: 100vh;
+        `}
+      >
+        {Graph.getNodeIds(graph).map((nodeId) => {
+          const nodeAttributes = Graph.getNodeAttributes(graph, nodeId)!;
+          return (
+            <div key={NodeId.stringify(nodeId)}>
+              <NodeReferenceView graph={graph} nodeId={nodeId} />
+              {" = "}
+              <NodeIdSelector
+                graph={graph}
+                value={nodeAttributes.extract}
+                onChange={(extractNodeId) => {
+                  setGraph(Graph.setNodeAttributes(graph, nodeId, { ...nodeAttributes, extract: extractNodeId }));
+                }}
+              />
+            </div>
+          );
+        })}
+        <input
+          value={text}
+          onChange={(event) => {
+            setText(event.target.value);
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              const nodeId = NodeId.createUnique();
+              setGraph(Graph.setNodeAttributes(graph, nodeId, { label: text, extract: null }));
+              setText("");
+            }
+          }}
+        />
+      </div>
+    );
+  };
+  function NodeReferenceView({ graph, nodeId }: { graph: Graph; nodeId: NodeId }) {
+    const { label } = Graph.getNodeAttributes(graph, nodeId)!;
+    return (
+      <React.Fragment>
+        {label ? <React.Fragment>{label}</React.Fragment> : <React.Fragment>{NodeId.stringify(nodeId)}</React.Fragment>}
+      </React.Fragment>
+    );
+  }
+  function NodeIdSelector({
+    graph,
+    value,
+    onChange,
+  }: {
+    graph: Graph;
+    value: NodeId | null;
+    onChange(nodeId: NodeId | null): void;
+  }) {
+    const [text, setText] = React.useState("");
+    const suggestedNodeIds = Graph.getNodeIds(graph).sort((nodeId1, nodeId2) => {
+      const { label: label1 } = Graph.getNodeAttributes(graph, nodeId1)!;
+      const { label: label2 } = Graph.getNodeAttributes(graph, nodeId2)!;
+      const byLevenstein = getLevenshteinDistance(text, label1) - getLevenshteinDistance(text, label2);
+      if (byLevenstein !== 0) return byLevenstein;
+      return label1.localeCompare(label2);
+    });
+    const [selectedSuggestionIndex, setSelectedSuggestionIndex] = React.useState<number | null>(null);
+    const [hasFocus, setHasFocus] = React.useState(false);
+    const valueNodeAttributes = value ? Graph.getNodeAttributes(graph, value) : null;
+    const valueLabel = valueNodeAttributes?.label || (value ? NodeId.stringify(value) : "");
+    const inputRef = React.useRef<HTMLInputElement>(null);
+    return (
+      <div
+        css={`
+          display: inline-block;
+          position: relative;
+        `}
+      >
+        <input
+          ref={inputRef}
+          value={hasFocus ? text : valueLabel}
+          onChange={(event) => {
+            setText(event.target.value);
+          }}
+          placeholder={valueLabel}
+          css={`
+            background-color: ${theme.backgroundColor};
+            outline: none;
+            border: none;
+            color: ${hasFocus ? theme.textColorSecondary : theme.textColor};
+            font-size: inherit;
+            font-family: inherit;
+            width: ${(hasFocus ? text.length : valueLabel.length) || 1}ch;
+          `}
+          onKeyDown={(event) => {
+            if (event.key === "ArrowDown") {
+              event.preventDefault();
+              if (selectedSuggestionIndex === suggestedNodeIds.length - 1) {
+                setSelectedSuggestionIndex(null);
+              } else {
+                if (selectedSuggestionIndex !== null)
+                  setSelectedSuggestionIndex(Math.min(selectedSuggestionIndex + 1, suggestedNodeIds.length - 1));
+                else setSelectedSuggestionIndex(0);
+              }
+            }
+            if (event.key === "ArrowUp") {
+              event.preventDefault();
+              if (selectedSuggestionIndex === 0) {
+                setSelectedSuggestionIndex(null);
+              } else {
+                if (selectedSuggestionIndex !== null)
+                  setSelectedSuggestionIndex(Math.max(selectedSuggestionIndex - 1, 0));
+                else setSelectedSuggestionIndex(suggestedNodeIds.length - 1);
+              }
+            }
+            if (event.key === "Enter" && selectedSuggestionIndex !== null) {
+              event.preventDefault();
+              const nodeId = suggestedNodeIds[selectedSuggestionIndex];
+              if (nodeId) {
+                onChange(nodeId);
+                inputRef.current?.blur();
+              }
+            }
+          }}
+          onFocus={() => {
+            setHasFocus(true);
+            setText(valueLabel || "");
+            setSelectedSuggestionIndex(null);
+          }}
+          onBlur={() => {
+            setHasFocus(false);
+            setText("");
+            setSelectedSuggestionIndex(null);
+          }}
+        />
+        {hasFocus && (
+          <div
+            css={`
+              position: absolute;
+              top: 100%;
+              left: 0px;
+              max-height: 400px;
+              width: 400px;
+              z-index: 1;
+              box-shadow: 0px 0px 10px 0px rgba(0, 0, 0, 0.5);
+            `}
+          >
+            {suggestedNodeIds.map((nodeId) => {
+              const { label } = Graph.getNodeAttributes(graph, nodeId)!;
+              const isSelected = nodeId === suggestedNodeIds[selectedSuggestionIndex!];
+              return (
+                <div
+                  key={NodeId.stringify(nodeId)}
+                  onClick={() => {
+                    onChange(nodeId);
+                    inputRef.current?.blur();
+                  }}
+                  css={`
+                    background-color: ${isSelected ? theme.backgroundColorHighlight : theme.backgroundColorSecondary};
+                    padding: 0px 1ch;
+                  `}
+                >
+                  {label}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    );
+  }
+}
+
+type NodeIdInterface<NodeId> = {
+  createUnique(): NodeId;
+  stringify(nodeId: NodeId): string;
+  equals(nodeId1: NodeId, nodeId2: NodeId): boolean;
+};
+
+type GraphInterface<Store, NodeId> = {
+  empty: Store;
+  getNodeIds(store: Store): Array<NodeId>;
+  getNodeAttributes(store: Store, nodeId: NodeId): NodeAttributes<NodeId> | null;
+  setNodeAttributes(store: Store, nodeId: NodeId, attributes: NodeAttributes<NodeId> | null): Store;
+};
+
+type NodeAttributes<NodeId> = {
+  label: string;
+  extract: NodeId | null;
+};
+
+const StringNodeId: NodeIdInterface<string> = {
+  createUnique() {
+    return crypto.randomUUID();
+  },
+  stringify(nodeId) {
+    return nodeId;
+  },
+  equals(nodeId1, nodeId2) {
+    return nodeId1 === nodeId2;
+  },
+};
+
+const DictGraph: GraphInterface<Record<string, NodeAttributes<string>>, string> = {
+  empty: {},
+  getNodeIds(store) {
+    return Object.keys(store);
+  },
+  getNodeAttributes(store, nodeId) {
+    return store[nodeId] ?? null;
+  },
+  setNodeAttributes(store, nodeId, attributes) {
+    if (attributes === null) {
+      const { [nodeId]: _, ...rest } = store;
+      return rest;
+    }
+    return {
+      ...store,
+      [nodeId]: attributes,
+    };
+  },
+};
+
+const AppInstance = appFactory({ Graph: DictGraph, NodeId: StringNodeId });
+
+function getLevenshteinDistance(a: string, b: string) {
+  const dp = Array.from({ length: a.length + 1 }, () => Array.from({ length: b.length + 1 }, () => 0));
+  for (let i = 0; i <= a.length; i++) dp[i][0] = i;
+  for (let j = 0; j <= b.length; j++) dp[0][j] = j;
+  for (let i = 1; i <= a.length; i++)
+    for (let j = 1; j <= b.length; j++)
+      dp[i][j] =
+        a[i - 1] === b[j - 1]
+          ? dp[i - 1][j - 1]
+          : Math.min(dp[i - 1][j - 1] + 1, Math.min(dp[i - 1][j] + 1, dp[i][j - 1] + 1));
+  return dp[a.length][b.length];
+}
