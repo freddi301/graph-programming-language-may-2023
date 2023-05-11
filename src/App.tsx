@@ -16,6 +16,7 @@ function appFactory<Graph, NodeId>({
   return function App() {
     const [graph, setGraph] = React.useState<Graph>(Graph.empty);
     const [text, setText] = React.useState("");
+    const [highlightedNodeId, setHighlightedNodeId] = React.useState<NodeId | null>(null);
     return (
       <div
         css={`
@@ -30,7 +31,13 @@ function appFactory<Graph, NodeId>({
           const nodeAttributes = Graph.getNodeAttributes(graph, nodeId)!;
           return (
             <div key={NodeId.stringify(nodeId)}>
-              <NodeLabel graph={graph} nodeId={nodeId} onGraphChange={setGraph} />
+              <NodeLabel
+                graph={graph}
+                nodeId={nodeId}
+                onGraphChange={setGraph}
+                isHighlighted={highlightedNodeId ? highlightedNodeId === nodeId : false}
+                onIsHighlighted={setHighlightedNodeId}
+              />
               {" = "}
               <NodeIdSelector
                 graph={graph}
@@ -38,6 +45,8 @@ function appFactory<Graph, NodeId>({
                 onChange={(extractNodeId) => {
                   setGraph(Graph.setNodeAttributes(graph, nodeId, { ...nodeAttributes, extract: extractNodeId }));
                 }}
+                isHighlighted={highlightedNodeId ? highlightedNodeId === nodeAttributes.extract : false}
+                onIsHighlighted={setHighlightedNodeId}
               />
             </div>
           );
@@ -62,10 +71,14 @@ function appFactory<Graph, NodeId>({
     graph,
     onGraphChange,
     nodeId,
+    isHighlighted,
+    onIsHighlighted,
   }: {
     graph: Graph;
     onGraphChange(graph: Graph): void;
     nodeId: NodeId;
+    isHighlighted: boolean;
+    onIsHighlighted(nodeId: NodeId | null): void;
   }) {
     const [text, setText] = React.useState("");
     const inputRef = React.useRef<HTMLInputElement>(null);
@@ -80,7 +93,7 @@ function appFactory<Graph, NodeId>({
         }}
         placeholder={NodeId.stringify(nodeId)}
         css={`
-          background-color: ${theme.backgroundColor};
+          background-color: ${isHighlighted ? theme.backgroundColorHighlight : theme.backgroundColor};
           outline: none;
           border: none;
           color: ${hasFocus ? theme.textColorSecondary : theme.textColor};
@@ -95,11 +108,13 @@ function appFactory<Graph, NodeId>({
         onFocus={() => {
           setHasFocus(true);
           setText(nodeAttributes.label ? nodeAttributes.label : "");
+          onIsHighlighted(nodeId);
         }}
         onBlur={() => {
           setHasFocus(false);
           onGraphChange(Graph.setNodeAttributes(graph, nodeId, { ...nodeAttributes, label: text }));
           setText("");
+          onIsHighlighted(null);
         }}
         onKeyDown={(event) => {
           if (event.key === "Enter") {
@@ -114,6 +129,12 @@ function appFactory<Graph, NodeId>({
             });
           }
         }}
+        onMouseEnter={(event) => {
+          onIsHighlighted(nodeId);
+        }}
+        onMouseLeave={(event) => {
+          onIsHighlighted(null);
+        }}
       />
     );
   }
@@ -121,10 +142,14 @@ function appFactory<Graph, NodeId>({
     graph,
     value,
     onChange,
+    isHighlighted,
+    onIsHighlighted,
   }: {
     graph: Graph;
     value: NodeId | null;
     onChange(nodeId: NodeId | null): void;
+    isHighlighted: boolean;
+    onIsHighlighted(nodeId: NodeId | null): void;
   }) {
     const [text, setText] = React.useState("");
     const suggestedNodeIds = Graph.getNodeIds(graph).sort((nodeId1, nodeId2) => {
@@ -153,7 +178,7 @@ function appFactory<Graph, NodeId>({
           }}
           placeholder={value ? NodeId.stringify(value) : ""}
           css={`
-            background-color: ${theme.backgroundColor};
+            background-color: ${isHighlighted ? theme.backgroundColorHighlight : theme.backgroundColor};
             outline: none;
             border: none;
             color: ${hasFocus ? theme.textColorSecondary : theme.textColor};
@@ -202,6 +227,7 @@ function appFactory<Graph, NodeId>({
             }
           }}
           onFocus={() => {
+            if (value) onIsHighlighted(value);
             setHasFocus(true);
             setText(valueNodeAttributes?.label || "");
             setSelectedSuggestionIndex(null);
@@ -210,6 +236,13 @@ function appFactory<Graph, NodeId>({
             setHasFocus(false);
             setText("");
             setSelectedSuggestionIndex(null);
+            onIsHighlighted(null);
+          }}
+          onMouseEnter={(event) => {
+            if (value) onIsHighlighted(value);
+          }}
+          onMouseLeave={(event) => {
+            onIsHighlighted(null);
           }}
         />
         {hasFocus && (
