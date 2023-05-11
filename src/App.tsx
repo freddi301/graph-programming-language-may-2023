@@ -30,7 +30,7 @@ function appFactory<Graph, NodeId>({
           const nodeAttributes = Graph.getNodeAttributes(graph, nodeId)!;
           return (
             <div key={NodeId.stringify(nodeId)}>
-              <NodeReferenceView graph={graph} nodeId={nodeId} />
+              <NodeLabel graph={graph} nodeId={nodeId} onGraphChange={setGraph} />
               {" = "}
               <NodeIdSelector
                 graph={graph}
@@ -58,12 +58,63 @@ function appFactory<Graph, NodeId>({
       </div>
     );
   };
-  function NodeReferenceView({ graph, nodeId }: { graph: Graph; nodeId: NodeId }) {
-    const { label } = Graph.getNodeAttributes(graph, nodeId)!;
+  function NodeLabel({
+    graph,
+    onGraphChange,
+    nodeId,
+  }: {
+    graph: Graph;
+    onGraphChange(graph: Graph): void;
+    nodeId: NodeId;
+  }) {
+    const [text, setText] = React.useState("");
+    const inputRef = React.useRef<HTMLInputElement>(null);
+    const [hasFocus, setHasFocus] = React.useState(false);
+    const nodeAttributes = Graph.getNodeAttributes(graph, nodeId)!;
     return (
-      <React.Fragment>
-        {label ? <React.Fragment>{label}</React.Fragment> : <React.Fragment>{NodeId.stringify(nodeId)}</React.Fragment>}
-      </React.Fragment>
+      <input
+        ref={inputRef}
+        value={hasFocus ? text : nodeAttributes.label}
+        onChange={(event) => {
+          setText(event.target.value);
+        }}
+        placeholder={NodeId.stringify(nodeId)}
+        css={`
+          background-color: ${theme.backgroundColor};
+          outline: none;
+          border: none;
+          color: ${hasFocus ? theme.textColorSecondary : theme.textColor};
+          font-size: inherit;
+          font-family: inherit;
+          width: ${(hasFocus
+            ? text.length
+            : nodeAttributes.label
+            ? nodeAttributes.label.length
+            : NodeId.stringify(nodeId).length) || 1}ch;
+        `}
+        onFocus={() => {
+          setHasFocus(true);
+          setText(nodeAttributes.label ? nodeAttributes.label : "");
+        }}
+        onBlur={() => {
+          setHasFocus(false);
+          onGraphChange(Graph.setNodeAttributes(graph, nodeId, { ...nodeAttributes, label: text }));
+          setText("");
+        }}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            onGraphChange(Graph.setNodeAttributes(graph, nodeId, { ...nodeAttributes, label: text }));
+          }
+          if (event.key === "Escape") {
+            event.preventDefault();
+            setText(nodeAttributes.label ? nodeAttributes.label : "");
+            setTimeout(() => {
+              inputRef.current?.blur();
+            });
+          }
+        }}
+      />
     );
   }
   function NodeIdSelector({
@@ -86,7 +137,6 @@ function appFactory<Graph, NodeId>({
     const [selectedSuggestionIndex, setSelectedSuggestionIndex] = React.useState<number | null>(null);
     const [hasFocus, setHasFocus] = React.useState(false);
     const valueNodeAttributes = value ? Graph.getNodeAttributes(graph, value) : null;
-    const valueLabel = valueNodeAttributes?.label || (value ? NodeId.stringify(value) : "");
     const inputRef = React.useRef<HTMLInputElement>(null);
     return (
       <div
@@ -97,11 +147,11 @@ function appFactory<Graph, NodeId>({
       >
         <input
           ref={inputRef}
-          value={hasFocus ? text : valueLabel}
+          value={hasFocus ? text : valueNodeAttributes?.label}
           onChange={(event) => {
             setText(event.target.value);
           }}
-          placeholder={valueLabel}
+          placeholder={value ? NodeId.stringify(value) : ""}
           css={`
             background-color: ${theme.backgroundColor};
             outline: none;
@@ -109,7 +159,13 @@ function appFactory<Graph, NodeId>({
             color: ${hasFocus ? theme.textColorSecondary : theme.textColor};
             font-size: inherit;
             font-family: inherit;
-            width: ${(hasFocus ? text.length : valueLabel.length) || 1}ch;
+            width: ${(hasFocus
+              ? text.length
+              : valueNodeAttributes?.label
+              ? valueNodeAttributes.label.length
+              : value
+              ? NodeId.stringify(value).length
+              : 0) || 1}ch;
           `}
           onKeyDown={(event) => {
             if (event.key === "ArrowDown") {
@@ -140,10 +196,14 @@ function appFactory<Graph, NodeId>({
                 inputRef.current?.blur();
               }
             }
+            if (event.key === "Escape") {
+              event.preventDefault();
+              inputRef.current?.blur();
+            }
           }}
           onFocus={() => {
             setHasFocus(true);
-            setText(valueLabel || "");
+            setText(valueNodeAttributes?.label || "");
             setSelectedSuggestionIndex(null);
           }}
           onBlur={() => {
