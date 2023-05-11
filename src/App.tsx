@@ -84,6 +84,18 @@ function appFactory<Graph, NodeId>({
     const inputRef = React.useRef<HTMLInputElement>(null);
     const [hasFocus, setHasFocus] = React.useState(false);
     const nodeAttributes = Graph.getNodeAttributes(graph, nodeId)!;
+    const width = (() => {
+      if (hasFocus) {
+        if (text === "") {
+          if (nodeAttributes.label) return nodeAttributes.label.length;
+          return NodeId.stringify(nodeId).length;
+        }
+        return text.length;
+      } else {
+        if (nodeAttributes.label) return nodeAttributes.label.length;
+        return NodeId.stringify(nodeId).length;
+      }
+    })();
     return (
       <input
         ref={inputRef}
@@ -91,7 +103,7 @@ function appFactory<Graph, NodeId>({
         onChange={(event) => {
           setText(event.target.value);
         }}
-        placeholder={NodeId.stringify(nodeId)}
+        placeholder={hasFocus && text === "" && nodeAttributes.label ? nodeAttributes.label : NodeId.stringify(nodeId)}
         css={`
           background-color: ${isHighlighted ? theme.backgroundColorHighlight : theme.backgroundColor};
           outline: none;
@@ -99,11 +111,7 @@ function appFactory<Graph, NodeId>({
           color: ${hasFocus ? theme.textColorSecondary : theme.textColor};
           font-size: inherit;
           font-family: inherit;
-          width: ${(hasFocus
-            ? text.length
-            : nodeAttributes.label
-            ? nodeAttributes.label.length
-            : NodeId.stringify(nodeId).length) || 1}ch;
+          width: ${width || 1}ch;
         `}
         onFocus={() => {
           setHasFocus(true);
@@ -163,6 +171,14 @@ function appFactory<Graph, NodeId>({
     const [hasFocus, setHasFocus] = React.useState(false);
     const valueNodeAttributes = value ? Graph.getNodeAttributes(graph, value) : null;
     const inputRef = React.useRef<HTMLInputElement>(null);
+    const width = (() => {
+      if (hasFocus) {
+        return text.length;
+      } else {
+        if (valueNodeAttributes?.label) return valueNodeAttributes.label.length;
+        if (value) return NodeId.stringify(value).length;
+      }
+    })();
     return (
       <div
         css={`
@@ -172,7 +188,7 @@ function appFactory<Graph, NodeId>({
       >
         <input
           ref={inputRef}
-          value={hasFocus ? text : valueNodeAttributes?.label}
+          value={hasFocus ? text : valueNodeAttributes?.label ?? ""}
           onChange={(event) => {
             setText(event.target.value);
           }}
@@ -184,13 +200,7 @@ function appFactory<Graph, NodeId>({
             color: ${hasFocus ? theme.textColorSecondary : theme.textColor};
             font-size: inherit;
             font-family: inherit;
-            width: ${(hasFocus
-              ? text.length
-              : valueNodeAttributes?.label
-              ? valueNodeAttributes.label.length
-              : value
-              ? NodeId.stringify(value).length
-              : 0) || 1}ch;
+            width: ${width || 1}ch;
           `}
           onKeyDown={(event) => {
             if (event.key === "ArrowDown") {
@@ -215,10 +225,14 @@ function appFactory<Graph, NodeId>({
             }
             if (event.key === "Enter" && selectedSuggestionIndex !== null) {
               event.preventDefault();
-              const nodeId = suggestedNodeIds[selectedSuggestionIndex];
-              if (nodeId) {
-                onChange(nodeId);
-                inputRef.current?.blur();
+              if (text === "" && selectedSuggestionIndex === null) {
+                onChange(null);
+              } else {
+                const nodeId = suggestedNodeIds[selectedSuggestionIndex];
+                if (nodeId) {
+                  onChange(nodeId);
+                  inputRef.current?.blur();
+                }
               }
             }
             if (event.key === "Escape") {
@@ -263,10 +277,6 @@ function appFactory<Graph, NodeId>({
               return (
                 <div
                   key={NodeId.stringify(nodeId)}
-                  onClick={() => {
-                    onChange(nodeId);
-                    inputRef.current?.blur();
-                  }}
                   css={`
                     background-color: ${isSelected ? theme.backgroundColorHighlight : theme.backgroundColorSecondary};
                     padding: 0px 1ch;
@@ -294,6 +304,7 @@ type GraphInterface<Store, NodeId> = {
   getNodeIds(store: Store): Array<NodeId>;
   getNodeAttributes(store: Store, nodeId: NodeId): NodeAttributes<NodeId> | null;
   setNodeAttributes(store: Store, nodeId: NodeId, attributes: NodeAttributes<NodeId> | null): Store;
+  getReferenceCounts(store: Store, nodeId: NodeId): number;
 };
 
 type NodeAttributes<NodeId> = {
@@ -330,6 +341,18 @@ const DictGraph: GraphInterface<Record<string, NodeAttributes<string>>, string> 
       ...store,
       [nodeId]: attributes,
     };
+  },
+  getReferenceCounts(store, nodeId) {
+    const Graph = DictGraph;
+    const NodeId = StringNodeId;
+    let count = 0;
+    for (const otherNodeId of Graph.getNodeIds(store)) {
+      const otherNodeAttributes = Graph.getNodeAttributes(store, otherNodeId)!;
+      if (otherNodeAttributes.extract && NodeId.equals(otherNodeAttributes.extract, nodeId)) {
+        count++;
+      }
+    }
+    return count;
   },
 };
 
