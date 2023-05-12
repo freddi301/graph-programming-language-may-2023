@@ -1,3 +1,5 @@
+import React from "react";
+
 type Theme = {
   backgroundColor: string;
   backgroundColorSecondary: string;
@@ -7,7 +9,7 @@ type Theme = {
   fontFamily: string;
 };
 
-export const defaultTheme: Theme = {
+const defaultTheme: Theme = {
   backgroundColor: "#263238",
   backgroundColorSecondary: "#37474f",
   backgroundColorHighlight: "#546e7a",
@@ -15,3 +17,9 @@ export const defaultTheme: Theme = {
   textColorSecondary: "#90a4ae",
   fontFamily: "'JetBrains Mono', monospace",
 };
+
+const ThemeContext = React.createContext(defaultTheme);
+
+export function useTheme() {
+  return React.useContext(ThemeContext);
+}
