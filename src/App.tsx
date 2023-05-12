@@ -1,7 +1,8 @@
 import React from "react";
-import { defaultTheme as theme } from "./components/theme";
 import styled from "styled-components/macro";
+import { defaultTheme as theme } from "./components/theme";
 import { useLocalStorage } from "./components/useLocalStorage";
+import { flatMap, uniqWith } from "lodash";
 
 export default function App() {
   return <AppInstance />;
@@ -14,6 +15,9 @@ function appFactory<Graph, NodeId>({
   Graph: GraphInterface<Graph, NodeId>;
   NodeId: NodeIdInterface<NodeId>;
 }) {
+  const NodeAttributes = nodeAttributesInstanceFactory<NodeId>(NodeId);
+  type GraphId = string;
+  type GraphColor = string;
   return function App() {
     const [graphs, setGraphs] = useLocalStorage<Record<string, Graph>>({
       key: "graphs",
@@ -33,8 +37,8 @@ function appFactory<Graph, NodeId>({
         }
       },
     });
-    const [currentGraphId, setCurrentGraphId] = React.useState<string>("");
-    const [graphsDiffColors, setGraphsDiffColors] = React.useState<Record<string, string>>({});
+    const [currentGraphId, setCurrentGraphId] = React.useState<GraphId | null>();
+    const [graphsDiffColors, setGraphsDiffColors] = React.useState<Record<GraphId, GraphColor>>({});
     return (
       <div
         css={`
@@ -107,7 +111,7 @@ function appFactory<Graph, NodeId>({
             onClick={() => {
               const newGraphs = { ...graphs };
               const newGraphId = crypto.randomUUID();
-              newGraphs[newGraphId] = graphs[currentGraphId];
+              newGraphs[newGraphId] = graphs[currentGraphId!];
               setGraphs(newGraphs);
               setCurrentGraphId(newGraphId);
             }}
@@ -117,80 +121,89 @@ function appFactory<Graph, NodeId>({
             label="Delete"
             onClick={() => {
               const newGraphs = { ...graphs };
-              delete newGraphs[currentGraphId];
+              delete newGraphs[currentGraphId!];
               setGraphs(newGraphs);
             }}
             isEnabled={Boolean(graphs[currentGraphId!])}
           />
         </div>
-        {graphs[currentGraphId!] && (
-          <Editor
-            graphs={Object.fromEntries(
-              Object.entries(graphs).filter(([graphId]) => graphId === currentGraphId || graphsDiffColors[graphId])
-            )}
-            onGraphChange={(graphKey, graph) => {
-              const newGraphs = { ...graphs };
-              newGraphs[graphKey!] = graph;
-              setGraphs(newGraphs);
-            }}
-            currentGraphKey={currentGraphId!}
-            graphsDiffColors={graphsDiffColors}
-          />
-        )}
+        {(() => {
+          if (!graphs[currentGraphId!]) return null;
+          const currentGraphColor = graphsDiffColors[currentGraphId!] ?? currentDiffColor;
+          const graphdDiffColorsWithActive = {
+            ...Object.fromEntries(Object.entries(graphsDiffColors).filter(([graphId]) => graphs[graphId])),
+            [currentGraphId!]: currentGraphColor,
+          };
+          return (
+            <Editor
+              graphs={Object.fromEntries(
+                Object.entries(graphdDiffColorsWithActive).map(([graphId, graphColor]) => [graphColor, graphs[graphId]])
+              )}
+              onGraphChange={(graphColor, graph) => {
+                const graphId = Object.entries(graphdDiffColorsWithActive).find(
+                  ([graphId, color]) => color === graphColor
+                )![0];
+                const newGraphs = { ...graphs };
+                newGraphs[graphId] = graph;
+                setGraphs(newGraphs);
+              }}
+              currentGraphColor={currentGraphColor}
+            />
+          );
+        })()}
       </div>
     );
   };
   function Editor({
     graphs,
     onGraphChange,
-    currentGraphKey,
-    graphsDiffColors,
+    currentGraphColor,
   }: {
-    currentGraphKey: string;
-    graphs: Record<string, Graph>;
-    graphsDiffColors: Record<string, string>;
+    currentGraphColor: string;
+    graphs: Record<GraphColor, Graph>;
     onGraphChange(graphKey: string, graph: Graph): void;
   }) {
     const [text, setText] = React.useState("");
     const [highlightedNodeId, setHighlightedNodeId] = React.useState<NodeId | null>(null);
-    const allGraphsNodeIds = Array.from(new Set(Object.values(graphs).flatMap((graph) => Graph.getNodeIds(graph))));
-    const graphKeys = Object.keys(graphs);
     return (
       <div css={``}>
-        {allGraphsNodeIds.map((nodeId) => {
+        {groupGraphColorsByUniqueNodeAttributes(graphs).map(({ nodeId, groups }) => {
           return (
             <React.Fragment key={NodeId.stringify(nodeId)}>
-              {graphKeys.map((graphKey) => {
-                const graph = graphs[graphKey];
-                const nodeAttributes = Graph.getNodeAttributes(graph, nodeId);
+              {groups.map(({ nodeAttributes, graphColors }, index) => {
                 if (!nodeAttributes) return null;
+                const isCurrentGraph = graphColors.includes(currentGraphColor);
                 return (
-                  <div
-                    key={graphKey}
-                    css={`
-                      border-left: 4px solid ${graphsDiffColors[graphKey] || "transparent"};
-                    `}
-                  >
+                  <div key={index} css={``}>
+                    {groups.length > 1 && <GraphColorMiniGrid graphColors={graphColors} />}
                     <NodeLabel
-                      graph={graph}
+                      graph={isCurrentGraph ? graphs[currentGraphColor] : graphs[graphColors[0]]}
                       nodeId={nodeId}
-                      onGraphChange={() => {
-                        onGraphChange(graphKey, graph);
+                      onGraphChange={(graph) => {
+                        if (isCurrentGraph) {
+                          onGraphChange(currentGraphColor, graph);
+                        }
                       }}
-                      isHighlighted={highlightedNodeId ? highlightedNodeId === nodeId : false}
+                      isHighlighted={highlightedNodeId ? NodeId.isEqual(highlightedNodeId, nodeId) : false}
                       onIsHighlighted={setHighlightedNodeId}
                     />
                     {" = "}
                     <NodeIdSelector
-                      graph={graph}
+                      graphs={graphs}
+                      currentGraphColor={currentGraphColor}
                       value={nodeAttributes.extract}
                       onChange={(extractNodeId) => {
-                        onGraphChange(
-                          graphKey,
-                          Graph.setNodeAttributes(graph, nodeId, { ...nodeAttributes, extract: extractNodeId })
-                        );
+                        if (isCurrentGraph) {
+                          onGraphChange(
+                            currentGraphColor,
+                            Graph.setNodeAttributes(graphs[currentGraphColor], nodeId, {
+                              ...nodeAttributes,
+                              extract: extractNodeId,
+                            })
+                          );
+                        }
                       }}
-                      isHighlighted={highlightedNodeId ? highlightedNodeId === nodeAttributes.extract : false}
+                      isHighlighted={equalsManageNull(NodeId.isEqual)(highlightedNodeId, nodeAttributes.extract)}
                       onIsHighlighted={setHighlightedNodeId}
                     />
                   </div>
@@ -199,22 +212,24 @@ function appFactory<Graph, NodeId>({
             </React.Fragment>
           );
         })}
-        <input
-          value={text}
-          onChange={(event) => {
-            setText(event.target.value);
-          }}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") {
-              const nodeId = NodeId.createUnique();
-              onGraphChange(
-                currentGraphKey,
-                Graph.setNodeAttributes(graphs[currentGraphKey], nodeId, { label: text, extract: null })
-              );
-              setText("");
-            }
-          }}
-        />
+        {graphs[currentGraphColor] && (
+          <input
+            value={text}
+            onChange={(event) => {
+              setText(event.target.value);
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                const nodeId = NodeId.createUnique();
+                onGraphChange(
+                  currentGraphColor,
+                  Graph.setNodeAttributes(graphs[currentGraphColor], nodeId, { label: text, extract: null })
+                );
+                setText("");
+              }
+            }}
+          />
+        )}
       </div>
     );
   }
@@ -234,27 +249,29 @@ function appFactory<Graph, NodeId>({
     const [text, setText] = React.useState("");
     const inputRef = React.useRef<HTMLInputElement>(null);
     const [hasFocus, setHasFocus] = React.useState(false);
-    const nodeAttributes = Graph.getNodeAttributes(graph, nodeId)!;
+    const nodeAttributes = Graph.getNodeAttributes(graph, nodeId);
     const width = (() => {
       if (hasFocus) {
         if (text === "") {
-          if (nodeAttributes.label) return nodeAttributes.label.length;
+          if (nodeAttributes?.label) return nodeAttributes.label.length;
           return NodeId.stringify(nodeId).length;
         }
         return text.length;
       } else {
-        if (nodeAttributes.label) return nodeAttributes.label.length;
+        if (nodeAttributes?.label) return nodeAttributes.label.length;
         return NodeId.stringify(nodeId).length;
       }
     })();
     return (
       <input
         ref={inputRef}
-        value={hasFocus ? text : nodeAttributes.label}
+        value={hasFocus ? text : nodeAttributes?.label ?? NodeId.stringify(nodeId)}
         onChange={(event) => {
           setText(event.target.value);
         }}
-        placeholder={hasFocus && text === "" && nodeAttributes.label ? nodeAttributes.label : NodeId.stringify(nodeId)}
+        placeholder={
+          hasFocus && text === "" && nodeAttributes?.label ? nodeAttributes?.label : NodeId.stringify(nodeId)
+        }
         css={`
           background-color: ${isHighlighted ? theme.backgroundColorHighlight : theme.backgroundColor};
           outline: none;
@@ -266,23 +283,23 @@ function appFactory<Graph, NodeId>({
         `}
         onFocus={() => {
           setHasFocus(true);
-          setText(nodeAttributes.label ? nodeAttributes.label : "");
+          setText(nodeAttributes?.label ? nodeAttributes.label : "");
           onIsHighlighted(nodeId);
         }}
         onBlur={() => {
           setHasFocus(false);
-          onGraphChange(Graph.setNodeAttributes(graph, nodeId, { ...nodeAttributes, label: text }));
+          onGraphChange(Graph.setNodeAttributes(graph, nodeId, { ...nodeAttributes!, label: text }));
           setText("");
           onIsHighlighted(null);
         }}
         onKeyDown={(event) => {
           if (event.key === "Enter") {
             event.preventDefault();
-            onGraphChange(Graph.setNodeAttributes(graph, nodeId, { ...nodeAttributes, label: text }));
+            onGraphChange(Graph.setNodeAttributes(graph, nodeId, { ...nodeAttributes!, label: text }));
           }
           if (event.key === "Escape") {
             event.preventDefault();
-            setText(nodeAttributes.label ? nodeAttributes.label : "");
+            setText(nodeAttributes?.label ? nodeAttributes.label : "");
             setTimeout(() => {
               inputRef.current?.blur();
             });
@@ -298,29 +315,36 @@ function appFactory<Graph, NodeId>({
     );
   }
   function NodeIdSelector({
-    graph,
+    graphs,
+    currentGraphColor,
     value,
     onChange,
     isHighlighted,
     onIsHighlighted,
   }: {
-    graph: Graph;
+    graphs: Record<GraphColor, Graph>;
+    currentGraphColor: GraphColor;
     value: NodeId | null;
     onChange(nodeId: NodeId | null): void;
     isHighlighted: boolean;
     onIsHighlighted(nodeId: NodeId | null): void;
   }) {
     const [text, setText] = React.useState("");
-    const suggestedNodeIds = Graph.getNodeIds(graph).sort((nodeId1, nodeId2) => {
-      const { label: label1 } = Graph.getNodeAttributes(graph, nodeId1)!;
-      const { label: label2 } = Graph.getNodeAttributes(graph, nodeId2)!;
-      const byLevenstein = getLevenshteinDistance(text, label1) - getLevenshteinDistance(text, label2);
-      if (byLevenstein !== 0) return byLevenstein;
-      return label1.localeCompare(label2);
-    });
+    const suggestions = groupGraphColorsByUniqueNodeAttributes(graphs)
+      .flatMap(({ nodeId, groups }) => {
+        return flatMap(groups, ({ nodeAttributes, graphColors }) => {
+          return nodeAttributes ? [{ nodeId, nodeAttributes, graphColors }] : [];
+        });
+      })
+      .sort((a, b) => {
+        const byLevenstein =
+          getLevenshteinDistance(text, a.nodeAttributes.label) - getLevenshteinDistance(text, b.nodeAttributes.label);
+        if (byLevenstein !== 0) return byLevenstein;
+        return a.nodeAttributes.label.localeCompare(b.nodeAttributes.label);
+      });
     const [selectedSuggestionIndex, setSelectedSuggestionIndex] = React.useState<number | null>(null);
     const [hasFocus, setHasFocus] = React.useState(false);
-    const valueNodeAttributes = value ? Graph.getNodeAttributes(graph, value) : null;
+    const valueNodeAttributes = value ? Graph.getNodeAttributes(graphs[currentGraphColor], value) : null;
     const inputRef = React.useRef<HTMLInputElement>(null);
     const width = (() => {
       if (hasFocus) {
@@ -356,11 +380,11 @@ function appFactory<Graph, NodeId>({
           onKeyDown={(event) => {
             if (event.key === "ArrowDown") {
               event.preventDefault();
-              if (selectedSuggestionIndex === suggestedNodeIds.length - 1) {
+              if (selectedSuggestionIndex === suggestions.length - 1) {
                 setSelectedSuggestionIndex(null);
               } else {
                 if (selectedSuggestionIndex !== null)
-                  setSelectedSuggestionIndex(Math.min(selectedSuggestionIndex + 1, suggestedNodeIds.length - 1));
+                  setSelectedSuggestionIndex(Math.min(selectedSuggestionIndex + 1, suggestions.length - 1));
                 else setSelectedSuggestionIndex(0);
               }
             }
@@ -371,7 +395,7 @@ function appFactory<Graph, NodeId>({
               } else {
                 if (selectedSuggestionIndex !== null)
                   setSelectedSuggestionIndex(Math.max(selectedSuggestionIndex - 1, 0));
-                else setSelectedSuggestionIndex(suggestedNodeIds.length - 1);
+                else setSelectedSuggestionIndex(suggestions.length - 1);
               }
             }
             if (event.key === "Enter" && selectedSuggestionIndex !== null) {
@@ -379,9 +403,9 @@ function appFactory<Graph, NodeId>({
               if (text === "" && selectedSuggestionIndex === null) {
                 onChange(null);
               } else {
-                const nodeId = suggestedNodeIds[selectedSuggestionIndex];
-                if (nodeId) {
-                  onChange(nodeId);
+                const selectedNode = suggestions[selectedSuggestionIndex];
+                if (selectedNode) {
+                  onChange(selectedNode.nodeId);
                   inputRef.current?.blur();
                 }
               }
@@ -422,18 +446,18 @@ function appFactory<Graph, NodeId>({
               box-shadow: 0px 0px 10px 0px rgba(0, 0, 0, 0.5);
             `}
           >
-            {suggestedNodeIds.map((nodeId) => {
-              const { label } = Graph.getNodeAttributes(graph, nodeId)!;
-              const isSelected = nodeId === suggestedNodeIds[selectedSuggestionIndex!];
+            {suggestions.map(({ nodeId, nodeAttributes, graphColors }, index) => {
+              const isSelected = selectedSuggestionIndex === index;
               return (
                 <div
-                  key={NodeId.stringify(nodeId)}
+                  key={index}
                   css={`
                     background-color: ${isSelected ? theme.backgroundColorHighlight : theme.backgroundColorSecondary};
                     padding: 0px 1ch;
                   `}
                 >
-                  {label}
+                  <GraphColorMiniGrid graphColors={graphColors} />
+                  {nodeAttributes.label}
                 </div>
               );
             })}
@@ -442,12 +466,59 @@ function appFactory<Graph, NodeId>({
       </div>
     );
   }
+  function GraphColorMiniGrid({ graphColors }: { graphColors: Array<GraphColor> }) {
+    return (
+      <div
+        css={`
+          display: inline-flex;
+        `}
+      >
+        {graphColors.map((graphColor) => {
+          return (
+            <div
+              key={graphColor}
+              css={`
+                background-color: ${graphColor};
+                width: 1ch;
+                height: 1em;
+              `}
+            ></div>
+          );
+        })}
+      </div>
+    );
+  }
+  function groupGraphColorsByUniqueNodeAttributes(graphs: Record<GraphColor, Graph>) {
+    const graphColors = Object.keys(graphs) as Array<GraphColor>;
+    const allNodeIds = uniqWith(
+      graphColors.flatMap((graphColor) => Graph.getNodeIds(graphs[graphColor])),
+      NodeId.isEqual
+    );
+    return allNodeIds.map((nodeId) => {
+      const allNodeAttributes = graphColors.map((graphColor) => Graph.getNodeAttributes(graphs[graphColor], nodeId));
+      const uniqueNodeAttributes = uniqWith(allNodeAttributes, equalsManageNull(NodeAttributes.isEqual));
+      return {
+        nodeId,
+        groups: uniqueNodeAttributes.map((nodeAttributes) => {
+          return {
+            nodeAttributes,
+            graphColors: graphColors.filter((graphColor) => {
+              return equalsManageNull(NodeAttributes.isEqual)(
+                nodeAttributes,
+                Graph.getNodeAttributes(graphs[graphColor], nodeId)
+              );
+            }),
+          };
+        }),
+      };
+    });
+  }
 }
 
 type NodeIdInterface<NodeId> = {
   createUnique(): NodeId;
   stringify(nodeId: NodeId): string;
-  equals(nodeId1: NodeId, nodeId2: NodeId): boolean;
+  isEqual(nodeId1: NodeId, nodeId2: NodeId): boolean;
 };
 
 type GraphInterface<Graph, NodeId> = {
@@ -457,13 +528,27 @@ type GraphInterface<Graph, NodeId> = {
   setNodeAttributes(graph: Graph, nodeId: NodeId, attributes: NodeAttributes<NodeId> | null): Graph;
   toJsonObject(graph: Graph): unknown;
   fromJsonObject(object: unknown): Graph | null;
-  getReferenceCounts(graph: Graph, nodeId: NodeId): number;
 };
 
 type NodeAttributes<NodeId> = {
   label: string;
   extract: NodeId | null;
 };
+
+type NodeAttributesInterface<NodeId> = {
+  isEqual(attributes1: NodeAttributes<NodeId>, attributes2: NodeAttributes<NodeId>): boolean;
+};
+
+function nodeAttributesInstanceFactory<NodeId>(NodeId: NodeIdInterface<NodeId>): NodeAttributesInterface<NodeId> {
+  return {
+    isEqual(attributes1, attributes2) {
+      return (
+        attributes1.label === attributes2.label &&
+        equalsManageNull(NodeId.isEqual)(attributes1.extract!, attributes2.extract!)
+      );
+    },
+  };
+}
 
 const StringNodeId: NodeIdInterface<string> = {
   createUnique() {
@@ -472,7 +557,7 @@ const StringNodeId: NodeIdInterface<string> = {
   stringify(nodeId) {
     return nodeId;
   },
-  equals(nodeId1, nodeId2) {
+  isEqual(nodeId1, nodeId2) {
     return nodeId1 === nodeId2;
   },
 };
@@ -500,18 +585,6 @@ const DictGraph: GraphInterface<Record<string, NodeAttributes<string>>, string> 
   },
   fromJsonObject(object) {
     return object as any;
-  },
-  getReferenceCounts(graph, nodeId) {
-    const Graph = DictGraph;
-    const NodeId = StringNodeId;
-    let count = 0;
-    for (const otherNodeId of Graph.getNodeIds(graph)) {
-      const otherNodeAttributes = Graph.getNodeAttributes(graph, otherNodeId)!;
-      if (otherNodeAttributes.extract && NodeId.equals(otherNodeAttributes.extract, nodeId)) {
-        count++;
-      }
-    }
-    return count;
   },
 };
 
@@ -552,3 +625,12 @@ function SimpleButton({ label, onClick, isEnabled }: { label: string; onClick():
 }
 
 const diffColors = ["red", "green", "blue", "yellow", "orange", "purple"];
+const currentDiffColor = theme.backgroundColor;
+
+function equalsManageNull<T>(equals: (x: T, y: T) => boolean): (x: T | null, y: T | null) => boolean {
+  return (x, y) => {
+    if (x !== null && y !== null) return equals(x, y);
+    if (x === null && y === null) return true;
+    return false;
+  };
+}
